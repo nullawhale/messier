@@ -3,6 +3,7 @@ extern crate gtk;
 extern crate glib;
 
 use std::{
+    env,
     fs::{self},
     path::{Path, PathBuf},
     rc::Rc,
@@ -55,7 +56,6 @@ enum Columns {
 static SHOW_HIDDEN: AtomicBool = AtomicBool::new(false);
 
 fn main() {
-    let path = PathBuf::from(".");
     /*let mut files = get_files_and_dirs(path.as_path());
 
     files.sort_by(|a, b| a.name.cmp(&b.name));
@@ -63,7 +63,7 @@ fn main() {
         println!("{} ({}) ({}) ({})", file.name, file.size, file.o_type, file.modified);
     }*/
 
-    let abs_pathbuf = fs::canonicalize(&path).unwrap();
+    let abs_pathbuf = fs::canonicalize(env::current_dir().unwrap()).unwrap();
 
     let application = Application::new(
         Some("com.github.gtk-rs.examples.basic"),
@@ -87,6 +87,7 @@ fn main() {
         sw.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         vbox.add(&sw);
 
+        let path = env::current_dir().unwrap();
         let model = Rc::new(create_model(get_files_and_dirs(path.as_path(), SHOW_HIDDEN.load(Ordering::SeqCst)).as_slice()));
         let tree_view = gtk::TreeView::with_model(&*model);
         tree_view.set_vexpand(true);
@@ -94,12 +95,21 @@ fn main() {
         sw.add(&tree_view);
         add_columns(&tree_view);
 
-        let button = Button::with_label("I'm useless!");
-        button.connect_clicked(move |_| {
-            // gtk::TreeView::
-            // unsafe { tree_view.set_data }
+        let button = Button::with_label("Show hidden");
+        button.connect_clicked(move |b| {
             let show_hidden: bool = SHOW_HIDDEN.load(Ordering::SeqCst);
             SHOW_HIDDEN.fetch_nand(show_hidden, Ordering::SeqCst);
+
+            let path = env::current_dir().unwrap();
+            let model = Rc::new(create_model(get_files_and_dirs(path.as_path(), SHOW_HIDDEN.load(Ordering::SeqCst)).as_slice()));
+            tree_view.set_model(Some(&*model));
+
+            if SHOW_HIDDEN.load(Ordering::SeqCst) {
+                b.set_label("Hide hidden");
+            } else {
+                b.set_label("Show hidden");
+            }
+
             println!("{:?}", SHOW_HIDDEN.load(Ordering::SeqCst));
 
         });
