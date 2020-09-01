@@ -14,6 +14,7 @@ use std::{
 use gio::prelude::*;
 use gtk::{Application, ApplicationWindow, Button, Entry, TreeView};
 use gtk::prelude::*;
+use glib::bitflags::_core::cell::RefCell;
 
 // File struct
 #[derive(Debug)]
@@ -79,8 +80,9 @@ fn main() {
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 8);
         window.add(&vbox);
 
-        let mut label = gtk::Label::new(abs_pathbuf.to_str());
-        vbox.add(&label);
+        let mut label: Rc<RefCell<gtk::Label>> = Rc::new(RefCell::new(gtk::Label::new(abs_pathbuf.to_str())));
+        // let mut rc_label: Rc<RefCell<gtk::Label>> = Rc::new(RefCell::new(label));
+        vbox.add(&*label.borrow_mut());
 
         let back = Button::with_label("<-");
         vbox.add(&back);
@@ -117,7 +119,7 @@ fn main() {
                     path.push(folder.unwrap());
                     env::set_current_dir(path.as_path());
                     println!("{:?}", path.as_path());
-                    // label.set_label(path.to_str().unwrap());
+                    (*label.borrow_mut()).set_label(path.to_str().unwrap());
                     update_tree_view_with_model(&tree);
                 }
             }
@@ -128,7 +130,7 @@ fn main() {
             let mut path = env::current_dir().unwrap();
             path.pop();
             env::set_current_dir(path.as_path());
-            // label.set_label(path.to_str().unwrap());
+            (*label.borrow_mut()).set_label(path.to_str().unwrap());
             update_tree_view_with_model(&tree_view);
         });
 
