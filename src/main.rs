@@ -12,7 +12,7 @@ use std::{
 };
 
 use gio::prelude::*;
-use gtk::{Application, ApplicationWindow, Button, Entry};
+use gtk::{Application, ApplicationWindow, Button, Entry, TreeView};
 use gtk::prelude::*;
 
 // File struct
@@ -79,43 +79,73 @@ fn main() {
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 8);
         window.add(&vbox);
 
-        let label = gtk::Label::new(abs_pathbuf.to_str());
+        let mut label = gtk::Label::new(abs_pathbuf.to_str());
         vbox.add(&label);
+
+        let back = Button::with_label("<-");
+        vbox.add(&back);
 
         let sw = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None:: <&gtk::Adjustment>);
         sw.set_shadow_type(gtk::ShadowType::EtchedIn);
         sw.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         vbox.add(&sw);
 
-        let path = env::current_dir().unwrap();
-        let model = Rc::new(create_model(get_files_and_dirs(path.as_path(), SHOW_HIDDEN.load(Ordering::SeqCst)).as_slice()));
-        let tree_view = gtk::TreeView::with_model(&*model);
-        tree_view.set_vexpand(true);
+        // let mut path = env::current_dir().unwrap();
+        // let model = Rc::new(create_model(get_files_and_dirs(path.as_path(), SHOW_HIDDEN.load(Ordering::SeqCst)).as_slice()));
+        // let mut tree_view = gtk::TreeView::with_model(&*model);
+        // tree_view.set_vexpand(true);
+        let tree_view = create_and_setup_view();
+        let model = create_model();
+        tree_view.set_model(Some(&model));
 
         sw.add(&tree_view);
-        add_columns(&tree_view);
 
         let button = Button::with_label("Show hidden");
+        vbox.add(&button);
+
+        window.show_all();
+
+        tree_view.connect_row_activated(
+            move |tree, path, _col| {
+                let model = tree.get_model().unwrap();
+                let iter = model.get_iter(path).unwrap();
+                let folder = model.get_value(&iter, 0).get::<String>().unwrap();
+                let item_type = model.get_value(&iter, 2).get::<String>().unwrap();
+
+                if item_type.unwrap().eq("Folder") {
+                    let mut path = env::current_dir().unwrap();
+                    path.push(folder.unwrap());
+                    env::set_current_dir(path.as_path());
+                    println!("{:?}", path.as_path());
+                    // label.set_label(path.to_str().unwrap());
+                    update_tree_view_with_model(&tree);
+                }
+            }
+        );
+
+        back.connect_clicked(move |_| {
+            println!("{:?}", env::current_dir().unwrap());
+            let mut path = env::current_dir().unwrap();
+            path.pop();
+            env::set_current_dir(path.as_path());
+            // label.set_label(path.to_str().unwrap());
+            update_tree_view_with_model(&tree_view);
+        });
+
         button.connect_clicked(move |b| {
             let show_hidden: bool = SHOW_HIDDEN.load(Ordering::SeqCst);
             SHOW_HIDDEN.fetch_nand(show_hidden, Ordering::SeqCst);
 
-            let path = env::current_dir().unwrap();
-            let model = Rc::new(create_model(get_files_and_dirs(path.as_path(), SHOW_HIDDEN.load(Ordering::SeqCst)).as_slice()));
-            tree_view.set_model(Some(&*model));
+            // update_tree_view_with_model(&tree_view);
 
             if SHOW_HIDDEN.load(Ordering::SeqCst) {
                 b.set_label("Hide hidden");
             } else {
                 b.set_label("Show hidden");
             }
-
-            println!("{:?}", SHOW_HIDDEN.load(Ordering::SeqCst));
-
         });
-        vbox.add(&button);
 
-        window.show_all();
+        // update_tree_view_with_model(&tree_view);
 
         let entry = Entry::new();
         entry.connect_key_press_event(|_, _| {
@@ -125,6 +155,11 @@ fn main() {
     });
 
     application.run(&[]);
+}
+
+fn update_tree_view_with_model(tree: &TreeView) {
+    let model = create_model();
+    tree.set_model(Some(&model));
 }
 
 fn get_files_and_dirs(dir: &Path, show_hidden: bool) -> Vec<File> {
@@ -141,7 +176,7 @@ fn get_files_and_dirs(dir: &Path, show_hidden: bool) -> Vec<File> {
         if metadata.is_dir() {
             files.push(File::new(
                 name,
-                "0".to_string(),
+                get_files_count_in_dir(path.path().as_path(), show_hidden),
                 "Folder".to_string(),
                 format_systime(time)
             ));
@@ -160,6 +195,25 @@ fn get_files_and_dirs(dir: &Path, show_hidden: bool) -> Vec<File> {
     } else {
         files.into_iter().filter(|f| !f.name.starts_with('.')).collect()
     }
+}
+
+fn get_files_count_in_dir(dir: &Path, show_hidden: bool) -> String {
+    let paths = fs::read_dir(dir).unwrap();
+    let mut counter = 0;
+    for path in paths {
+        let path = path.unwrap();
+        let metadata = path.metadata().unwrap();
+
+        if metadata.is_dir() || metadata.is_file() {
+            let name = path.file_name().into_string().unwrap();
+            if !name.starts_with('.') {
+                counter += 1;
+            } else if show_hidden == true {
+                counter += 1;
+            }
+        }
+    }
+    format!("{} items", counter)
 }
 
 fn format_systime(time: SystemTime) -> String {
@@ -185,20 +239,27 @@ fn format_filesize(bytes: u64) -> String {
     }
 }
 
-fn create_model(files: &[File]) -> gtk::ListStore {
+fn create_and_setup_view() -> TreeView {
+    let tree = TreeView::new();
+    tree.set_vexpand(true);
+    add_columns(&tree);
+    tree
+}
 
+fn create_model() -> gtk::ListStore {
     let col_types: [glib::Type; 4] = [
         glib::Type::String,
         glib::Type::String,
         glib::Type::String,
         glib::Type::String,
     ];
-
     let store = gtk::ListStore::new(&col_types);
-
     let col_indices: [u32; 4] = [0, 1, 2, 3];
 
-    for (_, d) in files.iter().enumerate() {
+    let mut path = env::current_dir().unwrap();
+    let mut files = get_files_and_dirs(path.as_path(), SHOW_HIDDEN.load(Ordering::SeqCst));
+
+    for (_, d) in files.as_slice().iter().enumerate() {
         let values: [&dyn ToValue; 4] = [
             &d.name,
             &d.size,
@@ -207,7 +268,6 @@ fn create_model(files: &[File]) -> gtk::ListStore {
         ];
         store.set(&store.append(), &col_indices, &values);
     }
-
     store
 }
 
