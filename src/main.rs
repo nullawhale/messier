@@ -1,33 +1,39 @@
 extern crate gio;
-extern crate gtk;
 extern crate glib;
+extern crate gtk;
 
 use std::{
+    cell::RefCell,
     env,
-    fs::{self},
-    path::{Path, PathBuf},
+    fs::{self, File},
+    path::Path,
+    process::Command,
     rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
     time::SystemTime,
-    sync::atomic::{AtomicBool, Ordering}
 };
 
 use gio::prelude::*;
 use gtk::{Application, ApplicationWindow, Button, Entry, TreeView};
 use gtk::prelude::*;
-use glib::bitflags::_core::cell::RefCell;
 
 // File struct
 #[derive(Debug)]
-struct File {
+struct MessierItem {
     name: String,
     size: String,
     o_type: String,
-    modified: String
+    modified: String,
 }
 
-impl File {
+impl MessierItem {
     pub fn new(name: String, size: String, o_type: String, modified: String) -> Self {
-        File { name, size, o_type, modified }
+        MessierItem {
+            name,
+            size,
+            o_type,
+            modified,
+        }
     }
 }
 
@@ -66,10 +72,9 @@ fn main() {
 
     let abs_pathbuf = fs::canonicalize(env::current_dir().unwrap()).unwrap();
 
-    let application = Application::new(
-        Some("com.github.gtk-rs.examples.basic"),
-        Default::default(),
-    ).expect("failed to initialize GTK application");
+    let application =
+        Application::new(Some("com.github.gtk-rs.examples.basic"), Default::default())
+            .expect("failed to initialize GTK application");
 
     application.connect_activate(move |app| {
         let window = ApplicationWindow::new(app);
@@ -80,14 +85,14 @@ fn main() {
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 8);
         window.add(&vbox);
 
-        let mut label: Rc<RefCell<gtk::Label>> = Rc::new(RefCell::new(gtk::Label::new(abs_pathbuf.to_str())));
+        let label: Rc<RefCell<gtk::Label>> = Rc::new(RefCell::new(gtk::Label::new(abs_pathbuf.to_str())));
         // let mut rc_label: Rc<RefCell<gtk::Label>> = Rc::new(RefCell::new(label));
         vbox.add(&*label.borrow_mut());
 
         let back = Button::with_label("<-");
         vbox.add(&back);
 
-        let sw = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None:: <&gtk::Adjustment>);
+        let sw = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
         sw.set_shadow_type(gtk::ShadowType::EtchedIn);
         sw.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         vbox.add(&sw);
@@ -96,56 +101,78 @@ fn main() {
         // let model = Rc::new(create_model(get_files_and_dirs(path.as_path(), SHOW_HIDDEN.load(Ordering::SeqCst)).as_slice()));
         // let mut tree_view = gtk::TreeView::with_model(&*model);
         // tree_view.set_vexpand(true);
-        let tree_view = create_and_setup_view();
+        let tree_view: Rc<RefCell<gtk::TreeView>> = create_and_setup_view();
         let model = create_model();
-        tree_view.set_model(Some(&model));
+        tree_view.borrow_mut().set_model(Some(&model));
 
-        sw.add(&tree_view);
+        sw.add(&*tree_view.borrow_mut());
 
         let button = Button::with_label("Show hidden");
         vbox.add(&button);
 
         window.show_all();
 
-        tree_view.connect_row_activated(
-            move |tree, path, _col| {
+        {
+            let label = label.clone();
+            let tree_view = tree_view.clone();
+            tree_view.borrow_mut().connect_row_activated(move |tree, path, _col| {
                 let model = tree.get_model().unwrap();
                 let iter = model.get_iter(path).unwrap();
-                let folder = model.get_value(&iter, 0).get::<String>().unwrap();
-                let item_type = model.get_value(&iter, 2).get::<String>().unwrap();
 
-                if item_type.unwrap().eq("Folder") {
-                    let mut path = env::current_dir().unwrap();
-                    path.push(folder.unwrap());
-                    env::set_current_dir(path.as_path());
-                    println!("{:?}", path.as_path());
-                    (*label.borrow_mut()).set_label(path.to_str().unwrap());
-                    update_tree_view_with_model(&tree);
+                {
+                    let item_name = model.get_value(&iter, 0).get::<String>().unwrap();
+                    let item_type = model.get_value(&iter, 2).get::<String>().unwrap();
+                    if item_type.unwrap().eq("Folder") {
+                        let mut path = env::current_dir().unwrap();
+                        path.push(item_name.unwrap());
+                        env::set_current_dir(path.as_path()).unwrap();
+                        println!("{:?}", path.as_path());
+                        label.borrow_mut().set_label(path.to_str().unwrap());
+                        update_tree_view_with_model(tree);
+                    }
                 }
-            }
-        );
 
-        back.connect_clicked(move |_| {
-            println!("{:?}", env::current_dir().unwrap());
-            let mut path = env::current_dir().unwrap();
-            path.pop();
-            env::set_current_dir(path.as_path());
-            (*label.borrow_mut()).set_label(path.to_str().unwrap());
-            update_tree_view_with_model(&tree_view);
-        });
+                {
+                    let item_name = model.get_value(&iter, 0).get::<String>().unwrap();
+                    let item_type = model.get_value(&iter, 2).get::<String>().unwrap();
+                    if item_type.unwrap().eq("File") {
+                        let mut path = env::current_dir().unwrap();
+                        path.push(item_name.unwrap());
+                        println!("{:?}", path.as_path());
+                        opener::open(path.as_path());
+                    }
+                }
+            });
+        }
 
-        button.connect_clicked(move |b| {
-            let show_hidden: bool = SHOW_HIDDEN.load(Ordering::SeqCst);
-            SHOW_HIDDEN.fetch_nand(show_hidden, Ordering::SeqCst);
+        {
+            let label = label.clone();
+            let tree_view = tree_view.clone();
+            back.connect_clicked(move |_| {
+                println!("{:?}", env::current_dir().unwrap());
+                let mut path = env::current_dir().unwrap();
+                path.pop();
+                env::set_current_dir(path.as_path()).unwrap();
+                label.borrow_mut().set_label(path.to_str().unwrap());
+                update_tree_view_with_model(&*tree_view.borrow_mut());
+            });
+        }
 
-            // update_tree_view_with_model(&tree_view);
+        {
+            let tree_view = tree_view.clone();
+            button.connect_clicked(move |b| {
+                let show_hidden: bool = SHOW_HIDDEN.load(Ordering::SeqCst);
+                SHOW_HIDDEN.fetch_nand(show_hidden, Ordering::SeqCst);
 
-            if SHOW_HIDDEN.load(Ordering::SeqCst) {
-                b.set_label("Hide hidden");
-            } else {
-                b.set_label("Show hidden");
-            }
-        });
+                update_tree_view_with_model(&*tree_view.borrow_mut());
+
+                if SHOW_HIDDEN.load(Ordering::SeqCst) {
+                    b.set_label("Hide hidden");
+                } else {
+                    b.set_label("Show hidden");
+                }
+            });
+        }
 
         // update_tree_view_with_model(&tree_view);
 
@@ -164,8 +191,8 @@ fn update_tree_view_with_model(tree: &TreeView) {
     tree.set_model(Some(&model));
 }
 
-fn get_files_and_dirs(dir: &Path, show_hidden: bool) -> Vec<File> {
-    let mut files: Vec<File> = Vec::new();
+fn get_files_and_dirs(dir: &Path, show_hidden: bool) -> Vec<MessierItem> {
+    let mut files: Vec<MessierItem> = Vec::new();
 
     let paths = fs::read_dir(dir).unwrap();
 
@@ -176,26 +203,30 @@ fn get_files_and_dirs(dir: &Path, show_hidden: bool) -> Vec<File> {
         let name = path.file_name().into_string().unwrap();
 
         if metadata.is_dir() {
-            files.push(File::new(
+            files.push(MessierItem::new(
                 name,
                 get_files_count_in_dir(path.path().as_path(), show_hidden),
                 "Folder".to_string(),
-                format_systime(time)
+                format_systime(time),
             ));
         } else if metadata.is_file() {
-            files.push(File::new(
+            files.push(MessierItem::new(
                 name,
                 format_filesize(metadata.len()),
                 "File".to_string(),
-                format_systime(time)
+                format_systime(time),
             ));
         }
     }
 
+    files.sort_by(|a, b| b.o_type.cmp(&a.o_type));
     if show_hidden == true {
         files
     } else {
-        files.into_iter().filter(|f| !f.name.starts_with('.')).collect()
+        files
+            .into_iter()
+            .filter(|f| !f.name.starts_with('.'))
+            .collect()
     }
 }
 
@@ -241,10 +272,10 @@ fn format_filesize(bytes: u64) -> String {
     }
 }
 
-fn create_and_setup_view() -> TreeView {
-    let tree = TreeView::new();
-    tree.set_vexpand(true);
-    add_columns(&tree);
+fn create_and_setup_view() -> Rc<RefCell<gtk::TreeView>> {
+    let tree = Rc::new(RefCell::new(TreeView::new()));
+    tree.borrow_mut().set_vexpand(true);
+    add_columns(&*tree.borrow_mut());
     tree
 }
 
@@ -258,16 +289,11 @@ fn create_model() -> gtk::ListStore {
     let store = gtk::ListStore::new(&col_types);
     let col_indices: [u32; 4] = [0, 1, 2, 3];
 
-    let mut path = env::current_dir().unwrap();
-    let mut files = get_files_and_dirs(path.as_path(), SHOW_HIDDEN.load(Ordering::SeqCst));
+    let path = env::current_dir().unwrap();
+    let files = get_files_and_dirs(path.as_path(), SHOW_HIDDEN.load(Ordering::SeqCst));
 
     for (_, d) in files.as_slice().iter().enumerate() {
-        let values: [&dyn ToValue; 4] = [
-            &d.name,
-            &d.size,
-            &d.o_type,
-            &d.modified,
-        ];
+        let values: [&dyn ToValue; 4] = [&d.name, &d.size, &d.o_type, &d.modified];
         store.set(&store.append(), &col_indices, &values);
     }
     store
