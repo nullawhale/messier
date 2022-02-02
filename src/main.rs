@@ -302,10 +302,16 @@ fn create_model() -> gtk::ListStore {
 fn add_columns(tree_view: &gtk::TreeView) {
     // Column for Name
     {
-        let renderer = gtk::CellRendererText::new();
         let column = gtk::TreeViewColumn::new();
+
+        let renderer_icon = gtk::CellRendererPixbuf::new();
+        column.pack_start(&renderer_icon, false);
+
+        let renderer = gtk::CellRendererText::new();
         column.pack_start(&renderer, true);
+
         column.set_title("Name");
+        column.add_attribute(&renderer_icon, "pixbuf", Columns::Name as i32);
         column.add_attribute(&renderer, "text", Columns::Name as i32);
         column.set_sort_column_id(Columns::Name as i32);
         column.set_expand(true);
